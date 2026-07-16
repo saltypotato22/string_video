@@ -21,8 +21,9 @@
   .sortbar select{background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:8px;padding:5px 8px;font-size:12.5px}
   .sortbar select option:disabled{color:#5a6675}
   .sortbar label{display:flex;align-items:center;gap:6px}
-  .sortbar .loadbtn{margin-left:auto;background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:8px;padding:6px 11px;font-size:12.5px;cursor:pointer}
-  .sortbar .loadbtn:hover{border-color:var(--acc)}
+  .loadbtn{background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:8px;padding:6px 11px;font-size:12.5px;cursor:pointer}
+  .sortbar .loadbtn{margin-left:auto}
+  .loadbtn:hover{border-color:var(--acc)}
   .frame{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:12px;overflow:hidden;border:1px solid var(--edge)}
   #player,.frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
   .ph{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:14px;color:var(--mut);padding:24px}
@@ -49,6 +50,15 @@
   li.clip .dur{flex:none;color:#cfe6ff;background:#12314f;border:1px solid #1d4b78;border-radius:20px;padding:2px 9px;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
   li.clip.on .dur{background:#173e63;color:#eaf4ff}
   .empty{color:var(--mut);font-size:13px;padding:26px 14px;text-align:center}
+  li.clip input.skp{flex:none;margin:0;accent-color:var(--acc)}
+  li.clip .rowctl{display:none;flex:none;gap:2px}
+  li.clip:hover .rowctl{display:inline-flex}
+  li.clip .rowctl button{width:20px;height:20px;padding:0;font-size:10px;line-height:1;
+    background:transparent;border:1px solid var(--edge);border-radius:5px;color:var(--mut);cursor:pointer}
+  li.clip .rowctl button:hover{border-color:var(--acc);color:var(--fg)}
+  li.clip .rowctl button:disabled{opacity:.3;cursor:default}
+  li.clip.skipped{opacity:.45}
+  li.clip.skipped .what{text-decoration:line-through}
 </style></head>
 <body>
 <header><h1 id="h1">string</h1><p id="sub"></p></header>
@@ -61,11 +71,12 @@
   <div class="side">
     <div class="listhead">
       <div class="cap" id="cap"></div>
+      <button class="loadbtn" id="exportbtn" style="margin-left:auto">&#10515; Export</button>
     </div>
     <div class="sortbar">
       <label>Sort
         <select id="sortsel">
-          <option value="as-authored">As added</option>
+          <option value="as-authored">Manual</option>
           <option value="section">By group</option>
           <option value="dur">Length</option>
           <option value="relevance">Relevance</option>
@@ -73,7 +84,7 @@
       </label>
       <label><input type="checkbox" id="groupchk" checked> Group</label>
       <button class="loadbtn" id="loadbtn">&#8593; Load&hellip;</button>
-      <input type="file" id="fileinput" accept=".json,application/json" hidden>
+      <input type="file" id="fileinput" accept=".json,.csv,application/json,text/csv" hidden>
     </div>
     <div class="list"><ul id="ul"></ul></div>
   </div>
@@ -101,6 +112,7 @@ var VIEW = [];
 var cur = -1;
 var curClip = -1;
 var sortKey = 'as-authored', groupBy = true;
+var manualOrder = [];
 var player = null, apiReady = false, watchdog = null, wantStart = false;
 var ORIGIN = location.origin && location.origin !== 'null' ? location.origin : '';
 var IS_FILE = location.protocol === 'file:';
@@ -123,7 +135,8 @@ function normClip(c){
     dur: (c.dur != null && isFinite(+c.dur)) ? Math.round(+c.dur) : Math.max(0, Math.round(end - start)),
     upload_date: c.upload_date || '',
     duration: (c.duration != null && isFinite(+c.duration)) ? +c.duration : null,
-    relevance: (c.relevance != null && isFinite(+c.relevance)) ? +c.relevance : null
+    relevance: (c.relevance != null && isFinite(+c.relevance)) ? +c.relevance : null,
+    skip: !!c.skip
   };
 }
 
@@ -136,6 +149,8 @@ function loadSpec(spec){
     if(!ok) dropped++; return ok;
   });
   if(dropped) console.warn(dropped + ' item(s) dropped.');
+  if(raw.length && !CLIPS.length){ alert('No usable rows in that file.'); }
+  manualOrder = CLIPS.map(function(_, i){ return i; });
   document.getElementById('h1').textContent = SPEC.title || 'string';
   document.getElementById('sub').textContent = SPEC.subtitle || '';
   document.title = SPEC.title || 'string';
@@ -168,12 +183,34 @@ function updateSortAvailability(){
   document.getElementById('groupchk').disabled = !hasSec;
 }
 function applySort(){
-  var order = CLIPS.map(function(_, i){ return i; });
-  var cmp = COMPARATORS[sortKey];
-  if(cmp){
-    order.sort(function(a, b){ return cmp(CLIPS[a], CLIPS[b]) || (a - b); });
+  var order;
+  if(sortKey === 'as-authored'){ order = manualOrder.slice(); }
+  else {
+    order = CLIPS.map(function(_, i){ return i; });
+    var cmp = COMPARATORS[sortKey];
+    if(cmp) order.sort(function(a, b){ return cmp(CLIPS[a], CLIPS[b]) || (a - b); });
   }
   render(order);
+}
+
+function moveClip(ci, where){            // where: 'up'|'down'|'top'|'bottom'
+  var hasSec = CLIPS.some(function(c){ return !!c.section; });
+  if(sortKey !== 'as-authored' || (groupBy && hasSec)){
+    manualOrder = VIEW.slice();          // bake what's on screen
+    sortKey = 'as-authored';
+    document.getElementById('sortsel').value = 'as-authored';
+    groupBy = false;
+    document.getElementById('groupchk').checked = false;
+  }
+  var i = manualOrder.indexOf(ci);
+  if(i < 0) return;
+  manualOrder.splice(i, 1);
+  var j = where === 'top' ? 0
+        : where === 'bottom' ? manualOrder.length
+        : where === 'up' ? Math.max(0, i - 1)
+        : Math.min(manualOrder.length, i + 1);
+  manualOrder.splice(j, 0, ci);
+  applySort();
 }
 
 function render(order){
@@ -205,15 +242,25 @@ function render(order){
     }
     g.items.forEach(function(ci){
       var pos = VIEW.length; VIEW.push(ci);
-      ul.appendChild(clipRow(CLIPS[ci], pos));
+      ul.appendChild(clipRow(CLIPS[ci], pos, ci));
     });
   });
+  if(VIEW.length){                         // VIEW is only final now: disable last row's down/bottom
+    var lastLi = ul.querySelector('li.clip[data-pos="' + (VIEW.length - 1) + '"]');
+    if(lastLi) lastLi.querySelectorAll('.rowctl button[data-dir="down"], .rowctl button[data-dir="bottom"]')
+      .forEach(function(b){ b.disabled = true; });
+  }
   if(curClip >= 0){ cur = VIEW.indexOf(curClip); selectRow(cur); }
   updateCap();
 }
-function clipRow(c, pos){
+function clipRow(c, pos, ci){
   var li = document.createElement('li'); li.className = 'clip'; li.dataset.pos = pos;
+  if(c.skip) li.classList.add('skipped');
   li.addEventListener('click', function(){ playAt(pos); });
+  var sk = document.createElement('input'); sk.type = 'checkbox'; sk.className = 'skp';
+  sk.checked = c.skip; sk.title = 'skip';
+  sk.addEventListener('click', function(e){ e.stopPropagation(); });
+  sk.addEventListener('change', function(){ c.skip = this.checked; applySort(); });
   var n = document.createElement('span'); n.className = 'n'; n.textContent = pos + 1;
   var body = document.createElement('span'); body.className = 'body';
   var what = document.createElement('span'); what.className = 'what'; what.textContent = c.what;
@@ -223,7 +270,16 @@ function clipRow(c, pos){
   body.appendChild(what); body.appendChild(src);
   var dur = document.createElement('span'); dur.className = 'dur';
   dur.title = 'length'; dur.textContent = c.dur + 's';
-  li.appendChild(n); li.appendChild(body); li.appendChild(dur);
+  var ctl = document.createElement('span'); ctl.className = 'rowctl';
+  [['⤒','top'], ['▲','up'], ['▼','down'], ['⤓','bottom']]
+    .forEach(function(p){
+      var b = document.createElement('button'); b.textContent = p[0]; b.title = p[1];
+      b.dataset.dir = p[1];
+      if(pos === 0 && (p[1] === 'up' || p[1] === 'top')) b.disabled = true;
+      b.addEventListener('click', function(e){ e.stopPropagation(); moveClip(ci, p[1]); });
+      ctl.appendChild(b);
+    });
+  li.appendChild(sk); li.appendChild(n); li.appendChild(body); li.appendChild(dur); li.appendChild(ctl);
   return li;
 }
 function updateCap(){
@@ -293,7 +349,8 @@ function startPlay(){
   if(!CLIPS.length) return;
   if(IS_FILE){ document.getElementById('filebanner').scrollIntoView({behavior:'smooth'}); return; }
   if(!apiReady){ wantStart = true; return; }
-  playAt(cur >= 0 ? cur : 0);
+  if(cur >= 0){ playAt(cur); }
+  else { var p = nextPlayable(0, +1); if(p >= 0) playAt(p); }
 }
 function selectRow(pos){
   document.querySelectorAll('li.clip').forEach(function(el){ el.classList.toggle('on', +el.dataset.pos === pos); });
@@ -332,9 +389,18 @@ function armWatchdog(c){
 }
 function onState(e){ if(e.data === YT.PlayerState.ENDED){ clearInterval(watchdog); advance(); } }
 function onErr(e){ document.getElementById('nsec').textContent = '— (skipping) '; clearInterval(watchdog); setTimeout(advance, 1500); }
-function advance(){ if(document.getElementById('auto').checked && cur < VIEW.length - 1) playAt(cur + 1); }
-function next(){ if(cur < VIEW.length - 1) playAt(cur + 1); else if(cur < 0) playAt(0); }
-function prev(){ if(cur > 0) playAt(cur - 1); }
+function nextPlayable(from, dir){        // dir: +1 or -1; -1 if none
+  for(var p = from; p >= 0 && p < VIEW.length; p += dir){
+    if(!CLIPS[VIEW[p]].skip) return p;
+  }
+  return -1;
+}
+function advance(){
+  if(!document.getElementById('auto').checked) return;
+  var p = nextPlayable(cur + 1, +1); if(p >= 0) playAt(p);
+}
+function next(){ var p = nextPlayable(cur < 0 ? 0 : cur + 1, +1); if(p >= 0) playAt(p); }
+function prev(){ var p = nextPlayable(cur - 1, -1); if(p >= 0) playAt(p); }
 function togglePause(){
   if(!player || !player.getPlayerState) return;
   var s = player.getPlayerState(), b = document.getElementById('pauseBtn');
@@ -347,14 +413,79 @@ document.addEventListener('keydown', function(e){
   else if(e.key===' '){ e.preventDefault(); togglePause(); }
 });
 
+function parseCSVRows(text){
+  var rows = [], row = [], field = '', i = 0, q = false, ch;
+  if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);           // strip BOM
+  while(i < text.length){
+    ch = text[i];
+    if(q){
+      if(ch === '"'){ if(text[i+1] === '"'){ field += '"'; i++; } else q = false; }
+      else field += ch;
+    } else if(ch === '"'){ q = true; }
+    else if(ch === ','){ row.push(field); field = ''; }
+    else if(ch === '\n' || ch === '\r'){
+      if(ch === '\r' && text[i+1] === '\n') i++;
+      row.push(field); field = ''; rows.push(row); row = [];
+    } else field += ch;
+    i++;
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(function(r){ return r.length > 1 || (r.length === 1 && r[0] !== ''); });
+}
+function specFromCSV(text){
+  var rows = parseCSVRows(text);
+  if(rows.length < 2) throw new Error('no data rows');
+  var head = rows[0].map(function(h){ return h.trim().toLowerCase(); });
+  var col = {}; head.forEach(function(h, i){ col[h] = i; });
+  function get(r, key){ return col[key] != null ? (r[col[key]] || '') : ''; }
+  var clips = rows.slice(1).map(function(r){
+    return {
+      id: get(r, 'rid'), start: parseFloat(get(r, 't0')), end: parseFloat(get(r, 't1')),
+      what: get(r, 'ttl'), section: get(r, 'grp'), channel: get(r, 'src'),
+      model: get(r, 'mdl'), ts: get(r, 'pos'), dur: parseFloat(get(r, 'len')),
+      desc: get(r, 'dsc'), skip: /^(1|true|y)$/i.test(get(r, 'skp').trim())
+    };
+  });
+  return { title: SPEC.title || 'string', subtitle: SPEC.subtitle || '', clips: clips };
+}
+
 function handleFile(file){
   if(!file) return;
   var reader = new FileReader();
   reader.onload = function(){
-    try { loadSpec(JSON.parse(String(reader.result || ''))); }
-    catch(err){ alert('Could not read “' + file.name + '”: ' + err.message); }
+    var text = String(reader.result || '');
+    var spec = null, jsonErr = null;
+    if(!/\.csv$/i.test(file.name)){
+      try { spec = JSON.parse(text); } catch(err){ jsonErr = err; }
+    }
+    if(!spec){
+      try { spec = specFromCSV(text); }
+      catch(csvErr){
+        alert('Could not read “' + file.name + '”: ' + (jsonErr || csvErr).message);
+        return;
+      }
+    }
+    loadSpec(spec);
   };
   reader.readAsText(file);
+}
+
+function csvCell(v){ v = (v==null?'':''+v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g,'""') + '"' : v; }
+function downloadCSV(){
+  if(!CLIPS.length) return;
+  var head = ['rid','t0','t1','ttl','grp','src','mdl','pos','len','dsc'];
+  var lines = [head.join(',')];
+  VIEW.forEach(function(ci){
+    var c = CLIPS[ci];
+    if(c.skip) return;
+    lines.push([c.id, c.start, c.end, c.what, c.section, c.channel,
+                c.model, c.ts, c.dur, c.desc].map(csvCell).join(','));
+  });
+  var blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
+  var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = (SPEC.title ? SPEC.title.replace(/[^\w.-]+/g,'_').slice(0,60) : 'string') + '.csv';
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
 }
 
 function b64ToBytes(b64){
@@ -382,6 +513,7 @@ async function boot(){
   document.getElementById('sortsel').addEventListener('change', function(){ sortKey = this.value; applySort(); });
   document.getElementById('groupchk').addEventListener('change', function(){ groupBy = this.checked; applySort(); });
   document.getElementById('loadbtn').addEventListener('click', function(){ document.getElementById('fileinput').click(); });
+  document.getElementById('exportbtn').addEventListener('click', downloadCSV);
   document.getElementById('fileinput').addEventListener('change', function(){ handleFile(this.files[0]); this.value = ''; });
   var ph = document.getElementById('ph');
   ['dragenter','dragover'].forEach(function(ev){ document.addEventListener(ev, function(e){ e.preventDefault(); ph.classList.add('drag'); }); });
